@@ -1,96 +1,101 @@
 import os
 import shutil
 import logging
-from collections import defaultdict
+import json  # Import the JSON module to handle the configuration file.
+from pathlib import Path
 
 # --- Configuration ---
-# Configure the logging system to provide clear, timestamped output.
-# This is crucial for diagnostics and tracking the operations of our utility.
+# The logging system remains essential for transparent operation.
 logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s - %(levelname)s - %(message)s',
                     handlers=[logging.StreamHandler()])
 
+
 # --- Core Logic ---
 class FileOrganizer:
     """
-    A class to organize files in a specified directory by their extension.
-    It provides a structured, reusable, and extensible way to manage file sorting.
+    Organizes files in a directory based on rules from an external config.json file.
+    This demonstrates a more robust and flexible design.
     """
 
     def __init__(self, target_directory):
         """
-        Initializes the FileOrganizer with a target directory.
+        Initializes the FileOrganizer. It now also loads the configuration.
 
         Args:
             target_directory (str): The absolute path to the directory to be organized.
         """
-        if not os.path.isdir(target_directory):
-            # We must validate our inputs. A system is only as strong as its weakest assumption.
+        self.target_directory = Path(target_directory)
+        if not self.target_directory.is_dir():
             raise ValueError(f"Error: The specified path '{target_directory}' is not a valid directory.")
-        self.target_directory = target_directory
-        self.file_mappings = self._create_default_mappings()
+
+        # The core of our evolution: loading rules from an external source.
+        self.file_mappings = self._load_mappings()
         logging.info(f"FileOrganizer initialized for directory: {self.target_directory}")
 
-    def _create_default_mappings(self):
+    def _load_mappings(self):
         """
-        Creates a default dictionary mapping file extensions to category folders.
-        This modular design allows for easy expansion in the future.
+        Loads sorting rules from 'config.json' and inverts them for efficient lookup.
+        This function makes the entire system dynamic.
         """
-        mappings = {
-            'Images': ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.webp', '.svg'],
-            'Documents': ['.pdf', '.docx', '.doc', '.xlsx', '.xls', '.pptx', '.ppt', '.txt', '.rtf', '.odt'],
-            'Archives': ['.zip', '.rar', '.7z', '.tar', '.gz'],
-            'Audio': ['.mp3', '.wav', '.aac', '.flac', '.ogg'],
-            'Video': ['.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv'],
-            'Scripts': ['.py', '.js', '.sh', '.bat'],
-            'Executables': ['.exe', '.msi', '.dmg'],
-        }
-        # Invert the dictionary for efficient lookups: {'.ext': 'Category'}
-        extension_to_category = {ext: category for category, extensions in mappings.items() for ext in extensions}
-        return extension_to_category
+        try:
+            config_path = Path(__file__).parent / 'config.json'
+            with open(config_path, 'r') as f:
+                data = json.load(f)
+
+            mappings = data.get("file_mappings", {})
+            # Invert the dictionary for efficient lookups: {'.ext': 'Category'}
+            extension_to_category = {
+                ext.lower(): category
+                for category, extensions in mappings.items()
+                for ext in extensions
+            }
+            logging.info("Successfully loaded and processed 'config.json'.")
+            return extension_to_category
+        except FileNotFoundError:
+            logging.error("FATAL: 'config.json' not found. Cannot proceed.")
+            raise
+        except json.JSONDecodeError:
+            logging.error("FATAL: 'config.json' is malformed. Please check its syntax.")
+            raise
 
     def organize_files(self):
         """
-        Executes the file organization process.
-        It iterates through all files in the target directory and moves them
-        to their respective category folders.
+        Executes the file organization process using the loaded mappings.
         """
         logging.info("Starting file organization process...")
         files_moved = 0
         files_skipped = 0
 
-        for filename in os.listdir(self.target_directory):
-            source_path = os.path.join(self.target_directory, filename)
-
-            # We only process files, not directories. This prevents recursion errors.
-            if os.path.isdir(source_path):
+        # Iterate using the modern Path object for better cross-platform compatibility.
+        for source_path in self.target_directory.iterdir():
+            # We only process files, not directories created by us or others.
+            if source_path.is_dir():
                 continue
 
-            # Extract the file extension, ensuring it's in lowercase for consistent matching.
-            file_extension = os.path.splitext(filename)[1].lower()
+            file_extension = source_path.suffix.lower()
 
             if not file_extension:
-                logging.warning(f"Skipping file without extension: {filename}")
+                logging.warning(f"Skipping file without extension: {source_path.name}")
                 files_skipped += 1
                 continue
 
-            # Determine the destination category. If unknown, it goes into 'Other'.
+            # Determine destination category from our loaded mappings. Default is 'Other'.
             destination_folder_name = self.file_mappings.get(file_extension, 'Other')
-            destination_path = os.path.join(self.target_directory, destination_folder_name)
+            destination_path = self.target_directory / destination_folder_name
 
-            # Create the destination folder if it does not exist. A necessary precaution.
-            os.makedirs(destination_path, exist_ok=True)
+            # Create destination folder if it doesn't exist.
+            destination_path.mkdir(exist_ok=True)
 
-            # Construct the final destination file path.
-            destination_file_path = os.path.join(destination_path, filename)
+            destination_file_path = destination_path / source_path.name
 
             try:
                 # The core action: moving the file.
-                shutil.move(source_path, destination_file_path)
-                logging.info(f"Moved: {filename} -> {destination_folder_name}/")
+                shutil.move(str(source_path), str(destination_file_path))
+                logging.info(f"Moved: {source_path.name} -> {destination_folder_name}/")
                 files_moved += 1
             except Exception as e:
-                logging.error(f"Failed to move {filename}. Error: {e}")
+                logging.error(f"Failed to move {source_path.name}. Error: {e}")
                 files_skipped += 1
 
         logging.info("--- Organization Complete ---")
@@ -99,21 +104,15 @@ class FileOrganizer:
 
 
 # --- Execution Block ---
-# This allows the script to be run directly.
-# It serves as the entry point for your execution.
 if __name__ == "__main__":
-    # IMPORTANT: Replace this path with the actual directory you want to organize.
-    # For example: 'C:/Users/YourUser/Downloads' or '/home/youruser/Desktop/TestFolder'
-    # For safety, I recommend creating a test folder with some dummy files first.
+    # IMPORTANT: Update this path to your test directory.
+    # e.g., 'C:/Users/YourUser/Downloads' or '/home/youruser/Desktop/TestFolder'
     directory_to_organize = "C:/Path/To/Your/Test/Folder"
 
     try:
-        # Create an instance of our organizer and run it.
         organizer = FileOrganizer(directory_to_organize)
         organizer.organize_files()
-    except ValueError as ve:
-        # We handle our custom errors gracefully.
-        logging.error(ve)
+    except (ValueError, FileNotFoundError) as e:
+        logging.error(e)
     except Exception as e:
-        # A general catch-all for any other unforeseen issues.
         logging.error(f"An unexpected error occurred: {e}")
